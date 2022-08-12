@@ -6,3 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+peb_walk_rs = { git = "https://github.com/d0ntrash/peb_walk_rs.git", version = "0.1.0" }
+
+[dependencies.windows-sys]
+version = "0.36.1"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    ]
