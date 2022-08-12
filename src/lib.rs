@@ -2,8 +2,10 @@ use windows_sys::Win32::Foundation::HINSTANCE;
 use windows_sys::Win32::System::Memory::HeapHandle;
 use windows_sys::Win32::System::Memory::HEAP_FLAGS;
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
+use windows_sys::Win32::System::SystemServices::IMAGE_IMPORT_DESCRIPTOR;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS64;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER;
+use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DATA_DIRECTORY;
 
 use std::io::Error;
 
@@ -14,6 +16,7 @@ pub type CreateFileW = unsafe extern "system" fn (isize, u32, u32, isize, u32, u
 pub type GetFileSize = unsafe extern "system" fn (isize, isize) -> u32;
 pub type VirtualAlloc = unsafe extern "system" fn (isize, usize, u32, u32) -> isize;
 pub type ReadFile = unsafe extern "system" fn (isize, isize, u32, isize, isize) -> isize;
+pub type LoadLibraryA = unsafe extern "system" fn (isize) -> i32;
 
 pub const GENERIC_READ: u32 = 2147483648u32;
 pub const FILE_SHARE_READ: u32 = 1u32;
@@ -23,6 +26,7 @@ pub const INVALID_HANDLE_VALUE: isize = -1i32 as isize;
 pub const MEM_COMMIT: u32 = 4096u32;
 pub const MEM_RESERVE: u32 = 8192u32;
 pub const PAGE_READWRITE: u32 = 4u32;
+pub const IMAGE_DIRECTORY_ENTRY_IMPORT: u32 = 1;
 
 // https://internals.rust-lang.org/t/get-the-offset-of-a-field-from-the-base-of-a-struct/14163
 macro_rules! get_offset {
@@ -38,10 +42,10 @@ macro_rules! get_offset {
 
 pub fn load_library(module_name: &str) {
     let kernel32_base_address: HINSTANCE = peb_walk_rs::get_module_base_addr("kernel32.dll");
-    let p_heap_alloc: HeapAlloc = unsafe{
+    let _p_heap_alloc: HeapAlloc = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "HeapAlloc"))
     };
-    let p_process_heap: GetProcessHeap = unsafe{
+    let _p_process_heap: GetProcessHeap = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "GetProcessHeap"))
     };
     let p_create_file: CreateFileW = unsafe{
@@ -55,6 +59,9 @@ pub fn load_library(module_name: &str) {
     };
     let p_read_file: ReadFile = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "ReadFile"))
+    };
+    let p_load_library: LoadLibraryA = unsafe{
+        std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "LoadLibraryA"))
     };
 
     let mut module_name_utf_16: Vec<u16> = module_name.encode_utf16().collect();
@@ -146,13 +153,59 @@ pub fn load_library(module_name: &str) {
             let from = (p_dll_data + image_section_header.PointerToRawData as isize + n as isize) as *const [u8; 1];
             unsafe{ *to = *from; }
         }
+
+        // increment pointer to the next entry
         p_image_section_header = (p_image_section_header as isize +
                                   (std::mem::size_of::<IMAGE_SECTION_HEADER>() as isize)) as *const IMAGE_SECTION_HEADER;
         image_section_header = unsafe{*p_image_section_header};
     }
 
+    // Reset section header to firt entry
+    p_image_section_header = (p_image_nt_headers as usize +
+                                                 get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
+                                      image_nt_headers.FileHeader.SizeOfOptionalHeader as usize) as *const IMAGE_SECTION_HEADER;
+    image_section_header = unsafe{*p_image_section_header};
+
+
     // TODO: Relocation
     image_nt_headers.OptionalHeader.ImageBase = module_base as u64;
+
+    let data_directory: IMAGE_DATA_DIRECTORY = image_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
+
+    if data_directory.Size != 0 {
+        let mut p_image_import_descriptor = (module_base + data_directory.VirtualAddress as isize)
+            as *const IMAGE_IMPORT_DESCRIPTOR;
+        let mut image_import_decriptor = unsafe{*p_image_import_descriptor};
+
+        loop {
+            if image_import_decriptor.Name == 0 {
+                break
+            }
+            // TODO: Check if library is present
+            //       Use LoadLibrary recursive
+            //       Delayed import helper
+            let load_status = unsafe{p_load_library(module_base + image_import_decriptor.Name as isize)};
+
+            if load_status == 0 {
+                let os_error = Error::last_os_error();
+                println!("Failed reading dll file: {os_error:?}");
+            }
+
+            p_image_import_descriptor = (p_image_import_descriptor as usize + std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>() as usize) as *const IMAGE_IMPORT_DESCRIPTOR;
+            image_import_decriptor = unsafe{*p_image_import_descriptor};
+        }
+    }
+
+    for i in 0..image_nt_headers.FileHeader.NumberOfSections {
+        if image_section_header.SizeOfRawData != 0 {
+
+        }
+        // increment pointer to the next entry
+        p_image_section_header = (p_image_section_header as usize +
+                                  get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
+                                  image_nt_headers.FileHeader.SizeOfOptionalHeader as usize) as *const IMAGE_SECTION_HEADER;
+        image_section_header = unsafe{*p_image_section_header};
+    }
 }
 
     // println!("{:x}", module_base);
