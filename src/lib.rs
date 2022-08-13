@@ -60,6 +60,7 @@ pub fn load_library(module_name: &str) {
     let p_read_file: ReadFile = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "ReadFile"))
     };
+    // TODO: Remove and use custom load_library recursive
     let p_load_library: LoadLibraryA = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "LoadLibraryA"))
     };
@@ -77,10 +78,12 @@ pub fn load_library(module_name: &str) {
             0
         )
     };
+
     if file_handle == INVALID_HANDLE_VALUE {
         let os_error = Error::last_os_error();
         println!("Failed opening dll file: {os_error:?}");
     }
+
     let file_size = unsafe{p_get_file_size(file_handle, 0)};
 
     let p_dll_data = unsafe{
@@ -95,6 +98,7 @@ pub fn load_library(module_name: &str) {
     let read_status = unsafe{
         p_read_file(file_handle, p_dll_data, file_size, 0, 0)
     };
+
     if read_status != 1 {
         let os_error = Error::last_os_error();
         println!("Failed reading dll file: {os_error:?}");
@@ -107,10 +111,9 @@ pub fn load_library(module_name: &str) {
     let image_dos_header: IMAGE_DOS_HEADER = unsafe{
         *(p_dll_data as *const IMAGE_DOS_HEADER)
     };
+
     let p_image_nt_headers = (p_dll_data + image_dos_header.e_lfanew as isize) as *const IMAGE_NT_HEADERS64;
-    let mut image_nt_headers: IMAGE_NT_HEADERS64 = unsafe{
-        *p_image_nt_headers
-    };
+    let mut image_nt_headers: IMAGE_NT_HEADERS64 = unsafe{*p_image_nt_headers};
 
     let mut module_base = image_nt_headers.OptionalHeader.ImageBase as isize;
     let region_size = image_nt_headers.OptionalHeader.SizeOfImage;
@@ -143,10 +146,11 @@ pub fn load_library(module_name: &str) {
     }
 
     let mut p_image_section_header = (p_image_nt_headers as usize +
-                                                 get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
+                                      get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
                                       image_nt_headers.FileHeader.SizeOfOptionalHeader as usize) as *const IMAGE_SECTION_HEADER;
     let mut image_section_header = unsafe{*p_image_section_header};
 
+    // Copy sections to module location
     for _ in 0..image_nt_headers.FileHeader.NumberOfSections {
         for n in 0..unsafe{(*p_image_section_header).SizeOfRawData} {
             let to = (module_base + image_section_header.VirtualAddress as isize + n as isize) as *mut [u8; 1];
@@ -162,12 +166,14 @@ pub fn load_library(module_name: &str) {
 
     // Reset section header to firt entry
     p_image_section_header = (p_image_nt_headers as usize +
-                                                 get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
-                                      image_nt_headers.FileHeader.SizeOfOptionalHeader as usize) as *const IMAGE_SECTION_HEADER;
+                              get_offset!(IMAGE_NT_HEADERS64, OptionalHeader) as usize +
+                              image_nt_headers.FileHeader.SizeOfOptionalHeader as usize) as *const IMAGE_SECTION_HEADER;
     image_section_header = unsafe{*p_image_section_header};
 
 
     // TODO: Relocation
+
+    // Set ImageBase to loaded module base
     image_nt_headers.OptionalHeader.ImageBase = module_base as u64;
 
     let data_directory: IMAGE_DATA_DIRECTORY = image_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
