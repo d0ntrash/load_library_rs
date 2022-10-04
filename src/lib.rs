@@ -50,6 +50,7 @@ pub const PAGE_EXECUTE_READWRITE: u32 = 64u32;
 pub const IMAGE_SCN_MEM_NOT_CACHED: u32 = 67108864u32;
 pub const PAGE_NOCACHE: u32 = 512u32;
 pub const DLL_PROCESS_ATTACH: u32 = 1u32;
+pub const IMAGE_ORDINAL_FLAG64: u64 = 0x8000000000000000;
 
 // https://internals.rust-lang.org/t/get-the-offset-of-a-field-from-the-base-of-a-struct/14163
 macro_rules! get_offset {
@@ -63,13 +64,18 @@ macro_rules! get_offset {
     })
 }
 
+#[inline]
+pub fn IMAGE_SNAP_BY_ORDINAL(ordinal: u64) -> bool {
+    (ordinal & IMAGE_ORDINAL_FLAG64) != 0
+}
+
+/// Parse section `characteristics` and return the accrding protections
 fn get_section_protection(characteristics: u32) -> u32 {
     let executable = if (characteristics & IMAGE_SCN_MEM_EXECUTE) != 0 {true} else {false};
     let readable = if (characteristics & IMAGE_SCN_MEM_READ) != 0 {true} else {false};
     let writeable = if (characteristics & IMAGE_SCN_MEM_WRITE) != 0 {true} else {false};
 
-
-    let mut protection = if !executable && !readable && !writeable {
+    if !executable && !readable && !writeable {
         PAGE_NOACCESS
     } else if !executable && !readable && writeable {
         PAGE_WRITECOPY
@@ -85,17 +91,20 @@ fn get_section_protection(characteristics: u32) -> u32 {
         PAGE_EXECUTE_READ
     } else {
         PAGE_EXECUTE_READWRITE
-    };
+    }
 
+    // For debugging
+    // Should not be needed anymore
     // if (characteristics & IMAGE_SCN_MEM_NOT_CACHED) != 0 {
     //     protection |= PAGE_NOCACHE;
     // }
-
-    protection
 }
 
 pub fn load_library(module_name: &str) {
+    // Get base address of kernel32.dll
     let kernel32_base_address: HINSTANCE = peb_walk_rs::get_module_base_addr("kernel32.dll");
+
+    // Get function addresses in kernel32.dll
     let _p_heap_alloc: HeapAlloc = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "HeapAlloc"))
     };
@@ -125,8 +134,10 @@ pub fn load_library(module_name: &str) {
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "LoadLibraryA"))
     };
 
+    // Convert module name string to utf16 byte array
     let mut module_name_utf_16: Vec<u16> = module_name.encode_utf16().collect();
 
+    // Open file based on given module name
     let file_handle = unsafe{
         p_create_file(
             module_name_utf_16.as_mut_ptr() as isize,
@@ -139,11 +150,13 @@ pub fn load_library(module_name: &str) {
         )
     };
 
+    // Check if file successfully opened
     if file_handle == INVALID_HANDLE_VALUE {
         let os_error = Error::last_os_error();
         println!("Failed opening dll file: {os_error:?}");
     }
 
+    // Get file size and allocate a according chunk of memory to load the dll
     let file_size = unsafe{p_get_file_size(file_handle, 0)};
 
     let p_dll_data = unsafe{
@@ -155,6 +168,7 @@ pub fn load_library(module_name: &str) {
         )
     };
 
+    // Read dll file into allocated chunk of memeory
     let read_status = unsafe{
         p_read_file(file_handle, p_dll_data, file_size, 0, 0)
     };
@@ -168,16 +182,19 @@ pub fn load_library(module_name: &str) {
     //       Check if module present with same name
     //       Check if valid PE
 
+    // Get DOS header from loaded dll
     let image_dos_header: IMAGE_DOS_HEADER = unsafe{
         *(p_dll_data as *const IMAGE_DOS_HEADER)
     };
 
+    // Get NT header
     let p_image_nt_headers = (p_dll_data + image_dos_header.e_lfanew as isize) as *const IMAGE_NT_HEADERS64;
     let mut image_nt_headers: IMAGE_NT_HEADERS64 = unsafe{*p_image_nt_headers};
 
     let mut module_base = image_nt_headers.OptionalHeader.ImageBase as isize;
     let region_size = image_nt_headers.OptionalHeader.SizeOfImage;
 
+    // Try allocate memory at the prefered image base location
     module_base = unsafe{
         p_virtual_alloc(
             module_base as isize,
@@ -187,6 +204,7 @@ pub fn load_library(module_name: &str) {
         )
     };
 
+    // If previos allocation failed allocate memory anywhere else
     if module_base == 0 {
         module_base = unsafe{
             p_virtual_alloc(
@@ -226,6 +244,7 @@ pub fn load_library(module_name: &str) {
 
 
     // TODO: Relocation
+    //       Needs to be done if allocation at prefered image base fails
 
     // Set ImageBase to loaded module base
     image_nt_headers.OptionalHeader.ImageBase = module_base as u64;
@@ -253,9 +272,36 @@ pub fn load_library(module_name: &str) {
                 println!("Failed reading dll file: {os_error:?}");
             }
 
-            //let p_first_thunk = (module_base + )
+            // Get FirstThunk as well as OriginalFirstThunk
+            // The function addresses in FirstThunk will be overwritten while OriginalFirstThunk will not be touched
+            let mut p_first_thunk = (module_base + image_import_decriptor.FirstThunk as isize) as *const IMAGE_THUNK_DATA64;
+            let mut p_orig_first_thunk = unsafe{(module_base + image_import_decriptor.Anonymous.OriginalFirstThunk as isize)
+                                                as *const IMAGE_THUNK_DATA64};
 
-            p_image_import_descriptor = (p_image_import_descriptor as usize + std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>() as usize) as *const IMAGE_IMPORT_DESCRIPTOR;
+            // Dereference to Rust structs
+            let mut first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
+            let mut orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
+
+            // Loop over each thunk
+            loop {
+                // Run until orig_first_thunk.ui.Function is 0
+                if unsafe{ orig_first_thunk.u1.Function } == 0 { break }
+
+                if IMAGE_SNAP_BY_ORDINAL(unsafe{orig_first_thunk.u1.Ordinal}){
+                    unimplemented!("Import by ordinal not implemented yet");
+                }
+
+                // Increment first_tunk and orig_first_thunk pointer
+                p_first_thunk = (p_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *const IMAGE_THUNK_DATA64;
+                p_orig_first_thunk = (p_orig_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *const IMAGE_THUNK_DATA64;
+
+                // Dereference to Rust structs
+                first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
+                orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
+            }
+
+            p_image_import_descriptor = (p_image_import_descriptor as usize +
+                                         std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>() as usize) as *const IMAGE_IMPORT_DESCRIPTOR;
             image_import_decriptor = unsafe{*p_image_import_descriptor};
         }
     }
@@ -282,11 +328,13 @@ pub fn load_library(module_name: &str) {
                 println!("Failed reading dll file: {os_error:?}");
             }
 
-            p_image_import_descriptor = (p_image_import_descriptor as usize + std::mem::size_of::<IMAGE_DELAYLOAD_DESCRIPTOR>() as usize) as *const IMAGE_DELAYLOAD_DESCRIPTOR;
+            p_image_import_descriptor = (p_image_import_descriptor as usize +
+                                         std::mem::size_of::<IMAGE_DELAYLOAD_DESCRIPTOR>() as usize) as *const IMAGE_DELAYLOAD_DESCRIPTOR;
             image_import_decriptor = unsafe{*p_image_import_descriptor};
         }
     }
 
+    // TODO: Link module to PEB
     // Set protections for each section
     // Reset section header to firt entry
     p_image_section_header = (p_image_nt_headers as usize +
@@ -333,8 +381,9 @@ pub fn load_library(module_name: &str) {
 
     // TODO: Check if entry point exists
     let dll_main: DLLMAIN = unsafe{std::mem::transmute(module_base + image_nt_headers.OptionalHeader.AddressOfEntryPoint as isize)};
-    println!("{:x}", image_nt_headers.OptionalHeader.AddressOfEntryPoint);
-    println!("{:x}", dll_main as isize);
+    println!("Entrypoint for loaded module: {:x}", image_nt_headers.OptionalHeader.AddressOfEntryPoint);
+    println!("DLL main {:x}", dll_main as isize);
+    println!("Module base {:x}", module_base);
     let mut line = String::new();
     let _ = std::io::stdin().read_line(&mut line).unwrap();
     unsafe{dll_main(module_base, DLL_PROCESS_ATTACH, 0)};
