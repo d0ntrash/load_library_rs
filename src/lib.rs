@@ -259,7 +259,6 @@ pub fn load_library(module_name: &str) {
     //// Needs to be done if allocation at prefered image base fails
 
     // Set ImageBase to loaded module base
-    println!("Optional Headaer: {:x}", image_nt_headers.OptionalHeader.ImageBase as u64);
     image_nt_headers.OptionalHeader.ImageBase = module_base as u64;
 
     //// TODO:

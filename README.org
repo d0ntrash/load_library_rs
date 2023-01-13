@@ -1,6 +1,17 @@
 #+TITLE: load_library_rs
 #+AUTHOR: d0ntrash
 ** About
-   Basic implementation of the windows loader in rust. This implementation is work in progress
-   and lacks some parts like relocation and the execution of TLS callbacks. However it already can be used to load
-   basic DLLs and call the entrypoint.
+   Basic implementation of the Windows loader in Rust. This implementation is still a work in progress and some parts
+   like relocation and execution of TLS callbacks are still missing. However, it can already be used to load DLLs and call the entry point.
+** Example
+   To load a dll, simply run ~load_library_rs~ and specify the path to the dll you want to load. Don't forget the terminating ~null~-byte.
+   The entry point will then be called automatically.
+   #+begin_src rust
+     use load_library_rs::load_library;
+
+     fn main() {
+         load_library("C:\\Users\\user\\Desktop\\testdll.dll\0");
+     }
+   #+end_src
+
+   To test this, you can use a simple test dll like this one: [[https://github.com/memN0ps/mmapper-rs/blob/main/testdll/src/lib.rs][testdll]] from [[https://github.com/memN0ps][memN0ps]].
