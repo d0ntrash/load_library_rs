@@ -1,0 +1,6 @@
+#+TITLE: peb_walk_rs
+#+AUTHOR: d0ntrash
+** About
+   Basic implementation of the windows loader in rust. This implementation is work in progress
+   and lacks some parts like relocation and the execution of TLS callbacks. However it already can be used to load
+   basic DLLs and call the entrypoint.
