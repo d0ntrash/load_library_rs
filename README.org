@@ -15,5 +15,11 @@
    #+end_src
 
    To test this, you can use a simple test dll like this one: [[https://github.com/memN0ps/mmapper-rs/blob/main/testdll/src/lib.rs][testdll]] from [[https://github.com/memN0ps][memN0ps]].
+** Todos
+*** TODO Relocation
+*** TODO Use load_library_rs recursively for imports
+*** TODO Link module to PEB
+*** TODO Fix TLS Callbacks
+*** TODO Do some sanity checks
 ** Credits
    The code is mainly based on the [[https://github.com/bats3c/DarkLoadLibrary][DarkLoadLibrary]] ~C~ implementation.
