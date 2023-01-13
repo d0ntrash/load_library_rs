@@ -1,4 +1,4 @@
-#+TITLE: peb_walk_rs
+#+TITLE: load_library_rs
 #+AUTHOR: d0ntrash
 ** About
    Basic implementation of the windows loader in rust. This implementation is work in progress
