@@ -25,6 +25,7 @@ pub type FlushInstructionCache = unsafe extern "system" fn (isize, isize, u32) -
 pub type DLLMAIN = unsafe extern "system" fn (isize, u32, isize) -> i32;
 
 //pub type PIMAGE_TLS_CALLBACK = unsafe extern "system" fn(isize, u32, isize);
+#[allow(non_camel_case_types)]
 pub type PIMAGE_TLS_CALLBACK = Option<unsafe extern "system" fn(dllhandle: isize, reason: u32, reserved: isize)>;
 
 pub const GENERIC_READ: u32 = 2147483648u32;
@@ -53,8 +54,8 @@ pub const PAGE_NOCACHE: u32 = 512u32;
 pub const DLL_PROCESS_ATTACH: u32 = 1u32;
 pub const IMAGE_ORDINAL_FLAG64: u64 = 0x8000000000000000;
 
-/// Implementation from:
-/// https://internals.rust-lang.org/t/get-the-offset-of-a-field-from-the-base-of-a-struct/14163
+// Implementation from:
+// https://internals.rust-lang.org/t/get-the-offset-of-a-field-from-the-base-of-a-struct/14163
 macro_rules! get_offset {
     ($type:ty, $field:tt) => ({
         let dummy = ::core::mem::MaybeUninit::<$type>::uninit();
@@ -68,6 +69,7 @@ macro_rules! get_offset {
 
 /// Check if searched by ordinal
 #[inline]
+#[allow(non_snake_case)]
 pub fn IMAGE_SNAP_BY_ORDINAL(ordinal: u64) -> bool {
     (ordinal & IMAGE_ORDINAL_FLAG64) != 0
 }
@@ -133,7 +135,10 @@ pub fn load_library(module_name: &str) {
     let p_flush_instruction_cache: FlushInstructionCache = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "FlushInstructionCache"))
     };
-    // TODO: Remove and use custom load_library recursive
+
+    //// TODO:
+    //// Remove import of "LoadLibraryA" and use custom load_library recursive
+
     let p_load_library: LoadLibraryA = unsafe{
         std::mem::transmute(peb_walk_rs::get_proc_addr(kernel32_base_address, "LoadLibraryA"))
     };
@@ -181,10 +186,11 @@ pub fn load_library(module_name: &str) {
         let os_error = Error::last_os_error();
         println!("Failed reading dll file: {os_error:?}");
     }
-    // TODO: Close handle
-    //       Check size
-    //       Check if module present with same name
-    //       Check if valid PE
+    //// TODO:
+    //// Close handle
+    //// Check size
+    //// Check if module present with same name
+    //// Check if valid PE
 
     // Get DOS header from loaded dll
     let image_dos_header: IMAGE_DOS_HEADER = unsafe{
@@ -248,14 +254,17 @@ pub fn load_library(module_name: &str) {
     }
 
 
-    // TODO: Relocation
-    //       Needs to be done if allocation at prefered image base fails
+    //// TODO:
+    //// Relocation!
+    //// Needs to be done if allocation at prefered image base fails
 
     // Set ImageBase to loaded module base
     println!("Optional Headaer: {:x}", image_nt_headers.OptionalHeader.ImageBase as u64);
     image_nt_headers.OptionalHeader.ImageBase = module_base as u64;
 
-    // TODO: Resolve local imports
+    //// TODO:
+    //// Resolve local imports
+
     // Resolve entry imports
     let data_directory: IMAGE_DATA_DIRECTORY = image_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
 
@@ -268,9 +277,10 @@ pub fn load_library(module_name: &str) {
             if image_import_decriptor.Name == 0 {
                 break
             }
-            // TODO: Check if library is present
-            //       Use LoadLibrary recursive
-            //       Delayed import helper
+            //// TODO:
+            //// Check if library is present
+            //// Use LoadLibrary recursive
+
             let library_handle = unsafe{p_load_library(module_base + image_import_decriptor.Name as isize)};
 
             if library_handle == 0 {
@@ -281,11 +291,10 @@ pub fn load_library(module_name: &str) {
             // Get FirstThunk as well as OriginalFirstThunk
             // The function addresses in FirstThunk will be overwritten while OriginalFirstThunk will not be touched
             let mut p_first_thunk = (module_base + image_import_decriptor.FirstThunk as isize) as *mut IMAGE_THUNK_DATA64;
-            let mut p_orig_first_thunk = unsafe{(module_base + image_import_decriptor.Anonymous.OriginalFirstThunk as isize)
-                                                as *const IMAGE_THUNK_DATA64};
+            let mut p_orig_first_thunk = (module_base +
+                                          unsafe{image_import_decriptor.Anonymous.OriginalFirstThunk as isize}) as *const IMAGE_THUNK_DATA64;
 
             // Dereference to Rust structs
-            let mut first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
             let mut orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
 
             // Loop over each thunk
@@ -298,7 +307,6 @@ pub fn load_library(module_name: &str) {
                 }
 
                 let p_import_by_name = unsafe{module_base + orig_first_thunk.u1.AddressOfData as isize} as *const IMAGE_IMPORT_BY_NAME;
-                let import_by_name = unsafe { *p_import_by_name };
 
                 // Get procedure name as string from raw pointer
                 let proc_name = unsafe {
@@ -309,20 +317,13 @@ pub fn load_library(module_name: &str) {
 
                 // Get proc address by name
                 let proc_address = peb_walk_rs::get_proc_addr(library_handle, proc_name);
-
-                println!("Proc Name: {}", proc_name);
-
                 unsafe {(*p_first_thunk).u1.Function = proc_address.unwrap() as u64};
-
-                //println!("Proc Name: {}", proc_name);
-                //println!("Proc Address: {:x}", proc_address.unwrap() as isize);
 
                 // Increment first_tunk and orig_first_thunk pointer
                 p_first_thunk = (p_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *mut IMAGE_THUNK_DATA64;
                 p_orig_first_thunk = (p_orig_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *const IMAGE_THUNK_DATA64;
 
                 // Dereference to Rust structs
-                first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
                 orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
             }
 
@@ -344,9 +345,10 @@ pub fn load_library(module_name: &str) {
             if image_import_decriptor.DllNameRVA == 0 {
                 break
             }
-            // TODO: Check if library is present
-            //       Use LoadLibrary recursive
-            //       Delayed import helper
+            //// TODO:
+            //// Check if library is present
+            //// Use LoadLibrary recursive
+
             let library_handle = unsafe{p_load_library(module_base + image_import_decriptor.DllNameRVA as isize)};
 
             if library_handle == 0 {
@@ -357,11 +359,10 @@ pub fn load_library(module_name: &str) {
             // Get FirstThunk as well as OriginalFirstThunk
             // The function addresses in FirstThunk will be overwritten while OriginalFirstThunk will not be touched
             let mut p_first_thunk = (module_base + image_import_decriptor.ImportAddressTableRVA as isize) as *mut IMAGE_THUNK_DATA64;
-            let mut p_orig_first_thunk = unsafe{(module_base + image_import_decriptor.ImportNameTableRVA as isize)
-                                                as *const IMAGE_THUNK_DATA64};
+            let mut p_orig_first_thunk = (module_base +
+                                          image_import_decriptor.ImportNameTableRVA as isize) as *const IMAGE_THUNK_DATA64;
 
             // Dereference to Rust structs
-            let mut first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
             let mut orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
 
             // Loop over each thunk
@@ -374,7 +375,6 @@ pub fn load_library(module_name: &str) {
                 }
 
                 let p_import_by_name = unsafe{module_base + orig_first_thunk.u1.AddressOfData as isize} as *const IMAGE_IMPORT_BY_NAME;
-                let import_by_name = unsafe { *p_import_by_name };
 
                 // Get procedure name as string from raw pointer
                 let proc_name = unsafe {
@@ -387,15 +387,12 @@ pub fn load_library(module_name: &str) {
                 let proc_address = peb_walk_rs::get_proc_addr(library_handle, proc_name);
 
                 unsafe {(*p_first_thunk).u1.Function = proc_address.unwrap() as u64};
-                // println!("Proc Name: {}", proc_name);
-                //println!("Proc Address: {:x}", proc_address.unwrap() as isize);
 
                 // Increment first_tunk and orig_first_thunk pointer
                 p_first_thunk = (p_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *mut IMAGE_THUNK_DATA64;
                 p_orig_first_thunk = (p_orig_first_thunk as usize + std::mem::size_of::<IMAGE_THUNK_DATA64>() as usize) as *const IMAGE_THUNK_DATA64;
 
                 // Dereference to Rust structs
-                first_thunk = unsafe{*p_first_thunk as IMAGE_THUNK_DATA64};
                 orig_first_thunk = unsafe{*p_orig_first_thunk as IMAGE_THUNK_DATA64};
             }
 
@@ -405,7 +402,8 @@ pub fn load_library(module_name: &str) {
         }
     }
 
-    // TODO: Link module to PEB
+    //// TODO:
+    //// Link module to PEB
 
     // Set protections for each section
     // Reset section header to first entry
@@ -427,7 +425,7 @@ pub fn load_library(module_name: &str) {
                 );
             }
         }
-        // increment pointer to the next entry
+        // Increment pointer to the next entry
         p_image_section_header = (p_image_section_header as isize +
                                   (std::mem::size_of::<IMAGE_SECTION_HEADER>() as isize)) as *const IMAGE_SECTION_HEADER;
         image_section_header = unsafe{*p_image_section_header};
@@ -435,8 +433,10 @@ pub fn load_library(module_name: &str) {
 
     unsafe{p_flush_instruction_cache(-1isize, 0, 0)};
 
+    //// TODO:
+    //// Fix TLS callback
+
     //     // Execute TLS callbacks
-    //     // TODO: Fix TLS callback
     //     let data_directory: IMAGE_DATA_DIRECTORY = image_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT as usize];
 
     //     if data_directory.Size != 0 {
@@ -451,25 +451,12 @@ pub fn load_library(module_name: &str) {
     //         unsafe{tls_callback_function(module_base, DLL_PROCESS_ATTACH, 0);}
     //     }
 
-    // TODO: Check if entry point exists
+    //// TODO:
+    //// Check if entry point exists
+
+    // Get DLL entrypoint
     let dll_main: DLLMAIN = unsafe{std::mem::transmute(module_base + image_nt_headers.OptionalHeader.AddressOfEntryPoint as isize)};
-    println!("Entrypoint for loaded module: {:x}", image_nt_headers.OptionalHeader.AddressOfEntryPoint);
-    println!("DLL main {:x}", dll_main as isize);
-    println!("Module base {:x}", module_base);
 
-
-    unsafe {
-
-        let user32 = peb_walk_rs::get_module_base_addr("user32.dll");
-        let dn_message_box_a: peb_walk_rs::MessageBoxA = std::mem::transmute(peb_walk_rs::get_proc_addr(user32, "MessageBoxA"));
-        let d_dn_message_box_a: peb_walk_rs::MessageBoxA = std::mem::transmute(peb_walk_rs::get_proc_addr(module_base, "MessageBoxA"));
-
-        println!("manually loaded: {:x}", d_dn_message_box_a as usize);
-        println!("default user32 : {:x}", dn_message_box_a as usize);
-        let mut line = String::new();
-        let _ = std::io::stdin().read_line(&mut line).unwrap();
-        unsafe{dll_main(module_base, DLL_PROCESS_ATTACH, 0)};
-        dn_message_box_a(0, "Resolved dynamically\0".as_ptr(), "MessageBoxA\0".as_ptr(), 0u32);
-        d_dn_message_box_a(0, "Resolved dynamically\0".as_ptr(), "MessageBoxA\0".as_ptr(), 0u32);
-    }
+    // Call DLL entrypoint
+    unsafe{dll_main(module_base, DLL_PROCESS_ATTACH, 0)};
 }
